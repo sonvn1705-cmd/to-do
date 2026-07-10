@@ -1,0 +1,6 @@
+{
+  "name": "Quản lý Việc cần làm",
+  "description": "Ứng dụng quản lý công việc hàng ngày với phân loại độ ưu tiên, đặt hạn chót và thông báo nhắc nhở.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
