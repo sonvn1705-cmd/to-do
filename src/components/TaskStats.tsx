@@ -43,14 +43,16 @@ export const TaskStats: React.FC<TaskStatsProps> = ({
 
   const highPriorityPending = tasks.filter(t => !t.completed && t.priority === TaskPriority.HIGH).length;
 
-  // Percentage complete
-  const autoCompletionRate = totalTasks > 0 ? Math.round((completedTasks / totalTasks) * 100) : 0;
-  
-  // Displayed performance rate (either custom manual rating or auto computed rate)
-  const displayPerformance = manualPerformanceRating !== null ? manualPerformanceRating : autoCompletionRate;
+  // Displayed performance (either custom manual rating count or auto computed completed tasks count)
+  const displayPerformance = manualPerformanceRating !== null ? manualPerformanceRating : completedTasks;
 
   // Compare performance against daily target goal
   const isGoalAchieved = displayPerformance >= dailyTargetGoal;
+
+  // Define max reference for progress bar scale (at least dailyTargetGoal, totalTasks, or 1 to avoid Division by Zero)
+  const maxRef = Math.max(dailyTargetGoal, totalTasks, 1);
+  const progressPercent = Math.min((displayPerformance / maxRef) * 100, 100);
+  const targetPercent = Math.min((dailyTargetGoal / maxRef) * 100, 100);
 
   return (
     <div id="stats-dashboard" className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
@@ -91,7 +93,7 @@ export const TaskStats: React.FC<TaskStatsProps> = ({
                 <div>
                   <div className="flex items-baseline gap-2">
                     <h4 className="text-4xl font-black font-mono tracking-tight">
-                      {displayPerformance}%
+                      {displayPerformance} <span className="text-lg font-normal text-indigo-200">/ {dailyTargetGoal}</span>
                     </h4>
                     <span className="text-[10px] text-indigo-100 font-semibold px-1.5 py-0.5 bg-white/15 rounded-md border border-white/10 uppercase tracking-wider">
                       {manualPerformanceRating !== null ? 'Tự đánh giá' : 'Tự động'}
@@ -99,17 +101,17 @@ export const TaskStats: React.FC<TaskStatsProps> = ({
                   </div>
                   <p className="mt-2 text-indigo-100 text-xs leading-relaxed font-sans">
                     {manualPerformanceRating !== null ? (
-                      <span>Đã tự điều chỉnh hiệu suất (Tự động: {autoCompletionRate}%).</span>
+                      <span>Đã tự điều chỉnh hiệu suất (Tự động: {completedTasks} việc).</span>
                     ) : (
                       <span>Đã giải quyết {completedTasks}/{totalTasks} công việc ngày.</span>
                     )}
                   </p>
                   <p className="text-[11px] text-indigo-200 mt-1 font-medium">
-                    Mục tiêu ngày: <strong className="text-white font-mono">{dailyTargetGoal}%</strong>
+                    Mục tiêu ngày: <strong className="text-white font-mono">{dailyTargetGoal} việc</strong>
                     {isGoalAchieved ? (
                       <span className="ml-2 text-emerald-300 font-bold">✓ Đạt mục tiêu!</span>
                     ) : (
-                      <span className="ml-2 text-amber-200 font-bold">({dailyTargetGoal - displayPerformance}% còn lại)</span>
+                      <span className="ml-2 text-amber-200 font-bold">({dailyTargetGoal - displayPerformance} việc còn lại)</span>
                     )}
                   </p>
                 </div>
@@ -119,14 +121,14 @@ export const TaskStats: React.FC<TaskStatsProps> = ({
                   <motion.div 
                     className={`h-full rounded-full ${isGoalAchieved ? 'bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.6)]' : 'bg-amber-400 shadow-[0_0_8px_rgba(251,191,36,0.6)]'}`}
                     initial={{ width: 0 }}
-                    animate={{ width: `${Math.min(displayPerformance, 100)}%` }}
+                    animate={{ width: `${progressPercent}%` }}
                     transition={{ duration: 0.5, ease: 'easeOut' }}
                   />
                   {/* Target Marker */}
                   <div 
                     className="absolute top-0 bottom-0 w-0.5 bg-white/60 z-20"
-                    style={{ left: `${dailyTargetGoal}%` }}
-                    title={`Mục tiêu: ${dailyTargetGoal}%`}
+                    style={{ left: `${targetPercent}%` }}
+                    title={`Mục tiêu: ${dailyTargetGoal} việc`}
                   />
                 </div>
               </motion.div>
@@ -143,14 +145,14 @@ export const TaskStats: React.FC<TaskStatsProps> = ({
                 <div className="space-y-1">
                   <div className="flex justify-between items-center text-[10px] font-bold text-indigo-100 uppercase tracking-wider">
                     <span>Mục tiêu ngày:</span>
-                    <span className="font-mono text-xs text-white">{dailyTargetGoal}%</span>
+                    <span className="font-mono text-xs text-white">{dailyTargetGoal} việc</span>
                   </div>
                   <input
                     type="range"
-                    min="10"
-                    max="100"
-                    step="5"
-                    value={dailyTargetGoal}
+                    min="1"
+                    max="20"
+                    step="1"
+                    value={Math.min(dailyTargetGoal, 20)}
                     onChange={(e) => onUpdateDailyTargetGoal(Number(e.target.value))}
                     className="w-full accent-emerald-400 cursor-pointer h-1.5 bg-indigo-950/40 rounded-lg appearance-none"
                   />
@@ -161,14 +163,14 @@ export const TaskStats: React.FC<TaskStatsProps> = ({
                   <div className="flex justify-between items-center text-[10px] font-bold text-indigo-100 uppercase tracking-wider">
                     <span>Tự đánh giá hiệu suất:</span>
                     <span className="font-mono text-xs text-white">
-                      {manualPerformanceRating !== null ? `${manualPerformanceRating}%` : 'Tắt'}
+                      {manualPerformanceRating !== null ? `${manualPerformanceRating} việc` : 'Tắt'}
                     </span>
                   </div>
                   
                   {manualPerformanceRating === null ? (
                     <button
                       type="button"
-                      onClick={() => onUpdateManualPerformanceRating(autoCompletionRate)}
+                      onClick={() => onUpdateManualPerformanceRating(completedTasks)}
                       className="w-full py-1 px-2.5 bg-white/10 hover:bg-white/20 border border-white/15 text-xs rounded-xl font-bold transition-all cursor-pointer text-center"
                     >
                       Bật tự đánh giá
@@ -178,8 +180,8 @@ export const TaskStats: React.FC<TaskStatsProps> = ({
                       <input
                         type="range"
                         min="0"
-                        max="100"
-                        step="5"
+                        max={Math.max(totalTasks, 15)}
+                        step="1"
                         value={manualPerformanceRating}
                         onChange={(e) => onUpdateManualPerformanceRating(Number(e.target.value))}
                         className="grow accent-emerald-400 cursor-pointer h-1.5 bg-indigo-950/40 rounded-lg appearance-none"

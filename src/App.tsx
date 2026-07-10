@@ -47,14 +47,26 @@ export default function App() {
   // Interactive performance stats states
   const [dailyTargetGoal, setDailyTargetGoal] = useState<number>(() => {
     const saved = localStorage.getItem('daily_target_goal');
-    return saved ? Number(saved) : 100;
+    if (saved) {
+      const parsed = Number(saved);
+      // Migrate legacy percentage goal (e.g. 50 or 100) to a reasonable task count (e.g. 3)
+      if (parsed > 25) {
+        return 3;
+      }
+      return parsed;
+    }
+    return 3; // Default to 3 tasks goal
   });
 
   const [manualPerformanceRating, setManualPerformanceRating] = useState<number | null>(() => {
     const saved = localStorage.getItem('manual_performance_rating');
     if (saved) {
       try {
-        return JSON.parse(saved);
+        const parsed = JSON.parse(saved);
+        if (parsed !== null && parsed > 25) {
+          return null; // Reset legacy percentage ratings
+        }
+        return parsed;
       } catch (e) {
         return null;
       }
@@ -79,6 +91,7 @@ export default function App() {
   const [syncMessage, setSyncMessage] = useState('');
   const [isCopied, setIsCopied] = useState(false);
   const isSyncingFromCloud = useRef(false);
+  const hasLoadedCloudData = useRef(false);
 
   // User Auth State
   const [user, setUser] = useState<User | null>(null);
@@ -174,6 +187,59 @@ export default function App() {
     }
   }, []);
 
+  // Register Service Worker and request browser Notification permissions
+  useEffect(() => {
+    if ('Notification' in window && Notification.permission === 'default') {
+      Notification.requestPermission().then((permission) => {
+        if (permission === 'granted') {
+          console.log('Quyền thông báo hệ thống đã được cấp!');
+        }
+      });
+    }
+
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('/sw.js')
+        .then((reg) => {
+          console.log('Service Worker đã được đăng ký thành công:', reg.scope);
+        })
+        .catch((err) => {
+          console.error('Đăng ký Service Worker thất bại:', err);
+        });
+
+      const handleServiceWorkerMessage = (event: MessageEvent) => {
+        if (event.data && event.data.type === 'TASKS_UPDATED_FROM_BACKGROUND') {
+          setTasks(event.data.tasks);
+          localStorage.setItem('daily_todos', JSON.stringify(event.data.tasks));
+        }
+      };
+
+      navigator.serviceWorker.addEventListener('message', handleServiceWorkerMessage);
+      return () => {
+        navigator.serviceWorker.removeEventListener('message', handleServiceWorkerMessage);
+      };
+    }
+  }, []);
+
+  // Sync tasks list to Service Worker cache whenever tasks state changes
+  useEffect(() => {
+    const sendTasksToSW = () => {
+      if (navigator.serviceWorker.controller) {
+        navigator.serviceWorker.controller.postMessage({
+          type: 'SET_TASKS',
+          tasks: tasks
+        });
+      }
+    };
+
+    if ('serviceWorker' in navigator) {
+      sendTasksToSW();
+      navigator.serviceWorker.addEventListener('controllerchange', sendTasksToSW);
+      return () => {
+        navigator.serviceWorker.removeEventListener('controllerchange', sendTasksToSW);
+      };
+    }
+  }, [tasks]);
+
   // Save data to cloud (Firestore)
   const saveDataToCloud = async (
     currentTasks: Task[],
@@ -182,6 +248,14 @@ export default function App() {
     codeToUse = user ? `USER-${user.uid}` : syncCode
   ) => {
     if (isSyncingFromCloud.current) return;
+    
+    // Safety check: Don't allow writing back to cloud until the initial cloud load completes successfully.
+    // This prevents default local sample/stale tasks from immediately overwriting existing cloud data on startup or Google Sign-In.
+    if (!hasLoadedCloudData.current) {
+      console.log("Ngăn chặn ghi đè: Dữ liệu đám mây chưa được tải xong.");
+      return;
+    }
+
     try {
       const docRef = doc(db, 'sync_sessions', codeToUse);
       await setDoc(docRef, {
@@ -197,6 +271,9 @@ export default function App() {
 
   // Real-time Firestore Sync Effect
   useEffect(() => {
+    // Reset load completion state whenever user or syncCode changes
+    hasLoadedCloudData.current = false;
+
     const activeKey = user ? `USER-${user.uid}` : syncCode;
     if (!activeKey) return;
 
@@ -223,6 +300,7 @@ export default function App() {
         }
         
         isSyncingFromCloud.current = false;
+        hasLoadedCloudData.current = true; // Mark as successfully loaded from cloud
         setSyncStatus('connected');
         if (user) {
           setSyncMessage(`Đồng bộ thành công qua tài khoản Google: ${user.email}`);
@@ -232,6 +310,7 @@ export default function App() {
       } else {
         // Create the session in firestore if it doesn't exist yet
         setSyncStatus('connected');
+        hasLoadedCloudData.current = true; // Allow saving from now on
         saveDataToCloud(tasks, dailyTargetGoal, manualPerformanceRating, activeKey);
         if (user) {
           setSyncMessage(`Đã tạo tài khoản đồng bộ: ${user.email}`);
