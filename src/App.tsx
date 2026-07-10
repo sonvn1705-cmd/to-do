@@ -8,7 +8,8 @@ import { TaskForm } from './components/TaskForm';
 import { TaskItem } from './components/TaskItem';
 import { NotificationModal } from './components/NotificationModal';
 import { doc, onSnapshot, setDoc, getDoc } from 'firebase/firestore';
-import { db } from './lib/firebase';
+import { db, auth, googleProvider } from './lib/firebase';
+import { signInWithPopup, signOut, onAuthStateChanged, User } from 'firebase/auth';
 import { 
   CheckSquare, 
   Search, 
@@ -29,7 +30,9 @@ import {
   CalendarDays,
   Sun,
   Sparkles,
-  Smartphone
+  Smartphone,
+  LogOut,
+  User as UserIcon
 } from 'lucide-react';
 import { CATEGORY_DETAILS } from './utils/constants';
 
@@ -76,6 +79,44 @@ export default function App() {
   const [syncMessage, setSyncMessage] = useState('');
   const [isCopied, setIsCopied] = useState(false);
   const isSyncingFromCloud = useRef(false);
+
+  // User Auth State
+  const [user, setUser] = useState<User | null>(null);
+
+  // Auth State Listener
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, (firebaseUser) => {
+      setUser(firebaseUser);
+    });
+    return () => unsubscribe();
+  }, []);
+
+  const handleGoogleSignIn = async () => {
+    setSyncStatus('loading');
+    setSyncMessage('Đang kết nối tài khoản Google...');
+    try {
+      const result = await signInWithPopup(auth, googleProvider);
+      setSyncStatus('connected');
+      setSyncMessage(`Đăng nhập thành công! Chào mừng ${result.user.displayName || result.user.email}`);
+    } catch (e: any) {
+      console.error("Google Sign-In Error:", e);
+      setSyncStatus('error');
+      setSyncMessage(`Không thể đăng nhập: ${e?.message || 'Vui lòng thử lại.'}`);
+    }
+  };
+
+  const handleSignOut = async () => {
+    setSyncStatus('loading');
+    try {
+      await signOut(auth);
+      setSyncStatus('idle');
+      setSyncMessage('Đã đăng xuất tài khoản Google.');
+    } catch (e: any) {
+      console.error("Google Sign-Out Error:", e);
+      setSyncStatus('error');
+      setSyncMessage('Có lỗi xảy ra khi đăng xuất.');
+    }
+  };
 
   // Search & Filtering
   const [searchQuery, setSearchQuery] = useState('');
@@ -138,7 +179,7 @@ export default function App() {
     currentTasks: Task[],
     currentTargetGoal: number,
     currentManualRating: number | null,
-    codeToUse = syncCode
+    codeToUse = user ? `USER-${user.uid}` : syncCode
   ) => {
     if (isSyncingFromCloud.current) return;
     try {
@@ -156,11 +197,12 @@ export default function App() {
 
   // Real-time Firestore Sync Effect
   useEffect(() => {
-    if (!syncCode) return;
+    const activeKey = user ? `USER-${user.uid}` : syncCode;
+    if (!activeKey) return;
 
     setSyncStatus('loading');
     
-    const docRef = doc(db, 'sync_sessions', syncCode);
+    const docRef = doc(db, 'sync_sessions', activeKey);
     
     const unsubscribe = onSnapshot(docRef, (snapshot) => {
       if (snapshot.exists()) {
@@ -182,10 +224,18 @@ export default function App() {
         
         isSyncingFromCloud.current = false;
         setSyncStatus('connected');
+        if (user) {
+          setSyncMessage(`Đồng bộ thành công qua tài khoản Google: ${user.email}`);
+        } else {
+          setSyncMessage('');
+        }
       } else {
         // Create the session in firestore if it doesn't exist yet
         setSyncStatus('connected');
-        saveDataToCloud(tasks, dailyTargetGoal, manualPerformanceRating, syncCode);
+        saveDataToCloud(tasks, dailyTargetGoal, manualPerformanceRating, activeKey);
+        if (user) {
+          setSyncMessage(`Đã tạo tài khoản đồng bộ: ${user.email}`);
+        }
       }
     }, (error) => {
       console.error("Firestore sync error:", error);
@@ -194,7 +244,7 @@ export default function App() {
     });
 
     return () => unsubscribe();
-  }, [syncCode]);
+  }, [syncCode, user]);
 
   // Save tasks on modification
   const saveTasks = (newTasks: Task[]) => {
@@ -256,10 +306,27 @@ export default function App() {
           setSyncMessage('');
         }
       }
-    } catch (e) {
+    } catch (e: any) {
       console.error("Error switching sync code:", e);
+      
+      const errorMessage = e?.message || '';
+      const isOfflineError = errorMessage.toLowerCase().includes('offline') || 
+                            e?.code === 'unavailable' || 
+                            !navigator.onLine;
+
+      if (isOfflineError) {
+        if (window.confirm("Đang ngoại tuyến. Bạn có muốn chuyển sang mã đồng bộ này để làm việc cục bộ và tự động đồng bộ khi kết nối mạng được khôi phục không?")) {
+          setSyncCode(formattedCode);
+          localStorage.setItem('flow_sync_code', formattedCode);
+          setSyncInputCode('');
+          setSyncStatus('connected');
+          setSyncMessage(`Đã chuyển sang mã ${formattedCode} ở chế độ ngoại tuyến. Dữ liệu sẽ đồng bộ khi có mạng.`);
+          return;
+        }
+      }
+
       setSyncStatus('error');
-      setSyncMessage('Không thể kết nối. Vui lòng thử lại.');
+      setSyncMessage(`Không thể kết nối: ${errorMessage || 'Vui lòng thử lại.'}`);
     }
   };
 
@@ -721,66 +788,149 @@ export default function App() {
         />
 
         {/* Real-time Cloud Sync Panel */}
-        <div id="cloud-sync-panel" className="bg-zinc-900/50 border border-zinc-800 rounded-[28px] p-5 shadow-lg text-zinc-100">
-          <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
-            <div className="flex items-center gap-3">
-              <div className="h-9 w-9 bg-indigo-500/10 text-indigo-400 rounded-xl flex items-center justify-center border border-indigo-500/15">
-                <Cloud size={18} className="animate-pulse" />
-              </div>
-              <div>
-                <div className="flex items-center gap-1.5">
-                  <h4 className="text-sm font-bold text-white">Đồng bộ đa thiết bị</h4>
-                  <span className="flex items-center gap-1 text-[9px] font-bold text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-1.5 py-0.2 rounded-md">
-                    <span className="h-1.5 w-1.5 bg-emerald-400 rounded-full animate-ping" />
-                    LIVE
-                  </span>
+        <div id="cloud-sync-panel" className="bg-zinc-900/50 border border-zinc-800 rounded-[28px] p-6 shadow-lg text-zinc-100 space-y-5">
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-center">
+            
+            {/* Google Sync Column */}
+            <div className="lg:col-span-6 flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-zinc-950/40 border border-zinc-850/50 p-4 rounded-2xl">
+              <div className="flex items-center gap-3">
+                {user ? (
+                  user.photoURL ? (
+                    <img
+                      src={user.photoURL}
+                      alt={user.displayName || "User"}
+                      className="h-10 w-10 rounded-full border border-indigo-500/30"
+                      referrerPolicy="no-referrer"
+                    />
+                  ) : (
+                    <div className="h-10 w-10 bg-indigo-500/10 text-indigo-400 rounded-full flex items-center justify-center border border-indigo-500/15">
+                      <UserIcon size={20} />
+                    </div>
+                  )
+                ) : (
+                  <div className="h-10 w-10 bg-zinc-800/30 text-zinc-400 rounded-full flex items-center justify-center border border-zinc-700/20">
+                    <UserIcon size={20} />
+                  </div>
+                )}
+                <div>
+                  <h4 className="text-sm font-bold text-white flex items-center gap-1.5">
+                    Đồng bộ bằng Google
+                    {user && (
+                      <span className="flex items-center gap-1 text-[9px] font-bold text-indigo-400 bg-indigo-500/10 border border-indigo-500/20 px-1.5 py-0.2 rounded-md">
+                        ACTIVE
+                      </span>
+                    )}
+                  </h4>
+                  <p className="text-xs text-zinc-400">
+                    {user ? user.email : "Sao lưu dữ liệu tự động theo tài khoản của bạn"}
+                  </p>
                 </div>
-                <p className="text-xs text-zinc-400">Đồng bộ danh sách công việc và hiệu suất tức thời qua đám mây</p>
+              </div>
+              
+              <div>
+                {user ? (
+                  <button
+                    type="button"
+                    onClick={handleSignOut}
+                    className="flex items-center gap-1.5 px-3.5 py-2 bg-zinc-900 hover:bg-zinc-850 border border-zinc-800 text-zinc-300 hover:text-white font-bold rounded-xl text-xs transition-all cursor-pointer"
+                  >
+                    <LogOut size={13} />
+                    Đăng xuất
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={handleGoogleSignIn}
+                    className="flex items-center gap-2 px-4 py-2 bg-white hover:bg-zinc-100 text-zinc-950 font-bold rounded-xl text-xs transition-all cursor-pointer shadow-md shadow-white/5 active:scale-95"
+                  >
+                    <svg className="w-3.5 h-3.5 mr-0.5" viewBox="0 0 24 24">
+                      <path
+                        fill="#4285F4"
+                        d="M23.745 12.27c0-.7-.06-1.4-.19-2.07H12v3.92h6.69c-.29 1.5-.1.14-.14 1.14-.85 1.49-2.12 2.5-3.67 3l.01-.01v2.51h6.41c3.75-3.46 5.44-8.55 5.44-10.49z"
+                      />
+                      <path
+                        fill="#34A853"
+                        d="M12 24c3.24 0 5.97-1.08 7.96-2.91l-6.41-2.51c-.8.53-1.85.86-3.13.86-2.42 0-4.47-1.63-5.2-3.86H.79v2.59C2.77 20.08 7.07 24 12 24z"
+                      />
+                      <path
+                        fill="#FBBC05"
+                        d="M6.8 15.58a7.14 7.14 0 0 1 0-4.57V8.42H.79a11.94 11.94 0 0 0 0 10.34l6.01-3.18z"
+                      />
+                      <path
+                        fill="#EA4335"
+                        d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.43-3.43C17.96 1.19 15.24 0 12 0 7.07 0 2.77 3.92.79 7.83l6.01 3.18c.73-2.23 2.78-3.86 5.2-3.86z"
+                      />
+                    </svg>
+                    Đăng nhập Google
+                  </button>
+                )}
               </div>
             </div>
-            
-            <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 w-full md:w-auto">
-              {/* Sync Code display */}
-              <div className="flex items-center justify-between bg-zinc-950 border border-zinc-850 py-1.5 px-3 rounded-xl gap-2 font-mono text-xs text-zinc-300">
-                <span className="text-zinc-500 text-[10px] uppercase font-bold tracking-wider">Mã thiết bị:</span>
-                <span className="font-extrabold text-indigo-400">{syncCode}</span>
-                <button
-                  type="button"
-                  onClick={() => {
-                    navigator.clipboard.writeText(syncCode);
-                    setIsCopied(true);
-                    setTimeout(() => setIsCopied(false), 2000);
-                  }}
-                  className="p-1 hover:bg-zinc-900 rounded-lg transition-all text-zinc-400 hover:text-white cursor-pointer"
-                  title="Sao chép mã"
-                >
-                  {isCopied ? <Check size={12} className="text-emerald-400 stroke-[3]" /> : <Copy size={12} />}
-                </button>
+
+            {/* Device Sync Column */}
+            <div className="lg:col-span-6 flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-zinc-950/40 border border-zinc-850/50 p-4 rounded-2xl">
+              <div className="flex items-center gap-3">
+                <div className="h-10 w-10 bg-indigo-500/10 text-indigo-400 rounded-xl flex items-center justify-center border border-indigo-500/15">
+                  <Smartphone size={20} />
+                </div>
+                <div>
+                  <h4 className="text-sm font-bold text-white flex items-center gap-1.5">
+                    Đồng bộ mã thiết bị
+                    {!user && (
+                      <span className="flex items-center gap-1 text-[9px] font-bold text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-1.5 py-0.2 rounded-md">
+                        ACTIVE
+                      </span>
+                    )}
+                  </h4>
+                  <p className="text-xs text-zinc-400">Sao chép hoặc nhập mã để đồng bộ thiết bị nhanh</p>
+                </div>
               </div>
 
-              {/* Sync Input Form */}
-              <div className="flex items-center gap-2">
-                <input
-                  type="text"
-                  placeholder="Nhập mã đồng bộ khác..."
-                  value={syncInputCode}
-                  onChange={(e) => setSyncInputCode(e.target.value)}
-                  className="bg-zinc-950 border border-zinc-850 rounded-xl px-3 py-1.5 text-xs text-white placeholder-zinc-500 max-w-[150px] outline-hidden focus:border-indigo-500 font-mono"
-                />
-                <button
-                  type="button"
-                  onClick={() => handleSwitchSyncCode(syncInputCode)}
-                  disabled={syncStatus === 'loading'}
-                  className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white font-bold rounded-xl text-xs transition-all cursor-pointer whitespace-nowrap disabled:opacity-50"
-                >
-                  {syncStatus === 'loading' ? 'Kết nối...' : 'Đồng bộ'}
-                </button>
+              <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5 w-full sm:w-auto">
+                {/* Sync Code display */}
+                <div className="flex items-center justify-between bg-zinc-950 border border-zinc-850/60 py-1.5 px-3 rounded-xl gap-2 font-mono text-xs text-zinc-300">
+                  <span className="text-zinc-500 text-[10px] uppercase font-bold tracking-wider">Mã:</span>
+                  <span className="font-extrabold text-indigo-400">{syncCode}</span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      navigator.clipboard.writeText(syncCode);
+                      setIsCopied(true);
+                      setTimeout(() => setIsCopied(false), 2000);
+                    }}
+                    className="p-1 hover:bg-zinc-900 rounded-lg transition-all text-zinc-400 hover:text-white cursor-pointer"
+                    title="Sao chép mã"
+                  >
+                    {isCopied ? <Check size={12} className="text-emerald-400 stroke-[3]" /> : <Copy size={12} />}
+                  </button>
+                </div>
+
+                {/* Sync Input Form */}
+                <div className="flex items-center gap-2">
+                  <input
+                    type="text"
+                    placeholder="Nhập mã khác..."
+                    value={syncInputCode}
+                    onChange={(e) => setSyncInputCode(e.target.value)}
+                    disabled={!!user}
+                    className="bg-zinc-950 border border-zinc-850 rounded-xl px-3 py-1.5 text-xs text-white placeholder-zinc-500 max-w-[120px] outline-hidden focus:border-indigo-500 font-mono disabled:opacity-40"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => handleSwitchSyncCode(syncInputCode)}
+                    disabled={syncStatus === 'loading' || !!user}
+                    className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white font-bold rounded-xl text-xs transition-all cursor-pointer whitespace-nowrap disabled:opacity-40"
+                  >
+                    {syncStatus === 'loading' ? 'K.nối...' : 'Đồng bộ'}
+                  </button>
+                </div>
               </div>
             </div>
+
           </div>
           
           {syncMessage && (
-            <div className={`mt-3 text-xs flex items-center gap-1 px-3 py-1.5 rounded-xl border ${
+            <div className={`text-xs flex items-center gap-1 px-3 py-1.5 rounded-xl border ${
               syncStatus === 'error' 
                 ? 'bg-red-500/10 border-red-500/20 text-red-400' 
                 : 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400'
