@@ -12,3 +12,4 @@ export const db = getFirestore(app);
 // Initialize Auth
 export const auth = getAuth(app);
 export const googleProvider = new GoogleAuthProvider();
+

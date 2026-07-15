@@ -43,14 +43,44 @@ export const TaskStats: React.FC<TaskStatsProps> = ({
 
   const highPriorityPending = tasks.filter(t => !t.completed && t.priority === TaskPriority.HIGH).length;
 
-  // Displayed performance (either custom manual rating count or auto computed completed tasks count)
-  const displayPerformance = manualPerformanceRating !== null ? manualPerformanceRating : completedTasks;
+  // New custom calculations for Daily Performance
+  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  
+  const isToday = (dateString: string) => {
+    if (!dateString) return false;
+    const d = new Date(dateString);
+    if (isNaN(d.getTime())) return false;
+    return (
+      d.getFullYear() === now.getFullYear() &&
+      d.getMonth() === now.getMonth() &&
+      d.getDate() === now.getDate()
+    );
+  };
+
+  // "công việc ngày là các công việc có hạn trong hôm nay hoặc bị trễ hạn"
+  const dailyTasks = tasks.filter(t => {
+    if (!t.deadline) return false;
+    if (isToday(t.deadline)) return true;
+    const d = new Date(t.deadline);
+    if (d < startOfToday) {
+      if (!t.completed) return true;
+      if (t.completedAt && isToday(t.completedAt)) return true;
+    }
+    return false;
+  });
+  const dailyTasksCount = dailyTasks.length;
+
+  // "công việc đã hoàn thành là các công việc có thời gian hoàn thành trong hôm nay"
+  const completedTodayCount = tasks.filter(t => t.completed && t.completedAt && isToday(t.completedAt)).length;
+
+  // Displayed performance (either custom manual rating count or auto computed completed tasks today count)
+  const displayPerformance = manualPerformanceRating !== null ? manualPerformanceRating : completedTodayCount;
 
   // Compare performance against daily target goal
   const isGoalAchieved = displayPerformance >= dailyTargetGoal;
 
-  // Define max reference for progress bar scale (at least dailyTargetGoal, totalTasks, or 1 to avoid Division by Zero)
-  const maxRef = Math.max(dailyTargetGoal, totalTasks, 1);
+  // Define max reference for progress bar scale (at least dailyTargetGoal, dailyTasksCount, or 1 to avoid Division by Zero)
+  const maxRef = Math.max(dailyTargetGoal, dailyTasksCount, 1);
   const progressPercent = Math.min((displayPerformance / maxRef) * 100, 100);
   const targetPercent = Math.min((dailyTargetGoal / maxRef) * 100, 100);
 
@@ -101,9 +131,9 @@ export const TaskStats: React.FC<TaskStatsProps> = ({
                   </div>
                   <p className="mt-2 text-indigo-100 text-xs leading-relaxed font-sans">
                     {manualPerformanceRating !== null ? (
-                      <span>Đã tự điều chỉnh hiệu suất (Tự động: {completedTasks} việc).</span>
+                      <span>Đã tự điều chỉnh hiệu suất (Tự động: {completedTodayCount} việc).</span>
                     ) : (
-                      <span>Đã giải quyết {completedTasks}/{totalTasks} công việc ngày.</span>
+                      <span>Đã giải quyết {completedTodayCount}/{dailyTasksCount} công việc ngày.</span>
                     )}
                   </p>
                   <p className="text-[11px] text-indigo-200 mt-1 font-medium">
@@ -170,7 +200,7 @@ export const TaskStats: React.FC<TaskStatsProps> = ({
                   {manualPerformanceRating === null ? (
                     <button
                       type="button"
-                      onClick={() => onUpdateManualPerformanceRating(completedTasks)}
+                      onClick={() => onUpdateManualPerformanceRating(completedTodayCount)}
                       className="w-full py-1 px-2.5 bg-white/10 hover:bg-white/20 border border-white/15 text-xs rounded-xl font-bold transition-all cursor-pointer text-center"
                     >
                       Bật tự đánh giá
@@ -180,7 +210,7 @@ export const TaskStats: React.FC<TaskStatsProps> = ({
                       <input
                         type="range"
                         min="0"
-                        max={Math.max(totalTasks, 15)}
+                        max={Math.max(dailyTasksCount, 15)}
                         step="1"
                         value={manualPerformanceRating}
                         onChange={(e) => onUpdateManualPerformanceRating(Number(e.target.value))}
