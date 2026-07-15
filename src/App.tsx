@@ -32,7 +32,8 @@ import {
   Sparkles,
   Smartphone,
   LogOut,
-  User as UserIcon
+  User as UserIcon,
+  CheckCircle2
 } from 'lucide-react';
 import { CATEGORY_DETAILS } from './utils/constants';
 
@@ -735,7 +736,7 @@ export default function App() {
     return 0;
   });
 
-  // Grouping tasks by day: Hôm nay, Ngày mai, Sau đó
+  // Grouping tasks by day: Hôm nay, Ngày mai, Sau đó, Đã hoàn thành trước đây
   const groupTasksByDay = (tasksList: Task[], refDate: Date) => {
     const startOfToday = new Date(refDate.getFullYear(), refDate.getMonth(), refDate.getDate());
     
@@ -745,16 +746,48 @@ export default function App() {
     const startOfAfterTomorrow = new Date(startOfTomorrow);
     startOfAfterTomorrow.setDate(startOfAfterTomorrow.getDate() + 1);
 
+    const isToday = (dateString: string | undefined) => {
+      if (!dateString) return false;
+      const d = new Date(dateString);
+      if (isNaN(d.getTime())) return false;
+      return (
+        d.getFullYear() === refDate.getFullYear() &&
+        d.getMonth() === refDate.getMonth() &&
+        d.getDate() === refDate.getDate()
+      );
+    };
+
     const todayTasks: Task[] = [];
     const tomorrowTasks: Task[] = [];
     const laterTasks: Task[] = [];
+    const completedBeforeTodayTasks: Task[] = [];
 
     tasksList.forEach(task => {
+      if (task.completed) {
+        if (task.completedAt) {
+          if (isToday(task.completedAt)) {
+            todayTasks.push(task);
+          } else {
+            const completedDate = new Date(task.completedAt);
+            if (!isNaN(completedDate.getTime()) && completedDate < startOfToday) {
+              completedBeforeTodayTasks.push(task);
+            } else {
+              todayTasks.push(task);
+            }
+          }
+        } else {
+          completedBeforeTodayTasks.push(task);
+        }
+        return;
+      }
+
       const taskDate = new Date(task.deadline);
       if (isNaN(taskDate.getTime())) {
         laterTasks.push(task);
-      } else if (taskDate < startOfTomorrow) {
+      } else if (isToday(task.deadline)) {
         todayTasks.push(task);
+      } else if (taskDate < startOfToday) {
+        todayTasks.push(task); // Overdue & uncompleted -> Hôm nay & Quá hạn
       } else if (taskDate < startOfAfterTomorrow) {
         tomorrowTasks.push(task);
       } else {
@@ -762,10 +795,10 @@ export default function App() {
       }
     });
 
-    return { todayTasks, tomorrowTasks, laterTasks };
+    return { todayTasks, tomorrowTasks, laterTasks, completedBeforeTodayTasks };
   };
 
-  const { todayTasks, tomorrowTasks, laterTasks } = groupTasksByDay(sortedTasks, currentTime);
+  const { todayTasks, tomorrowTasks, laterTasks, completedBeforeTodayTasks } = groupTasksByDay(sortedTasks, currentTime);
 
   return (
     <div id="app-root" className="min-h-screen bg-[#09090b] text-zinc-100 antialiased font-sans flex flex-col selection:bg-indigo-500/20">
@@ -1165,6 +1198,36 @@ export default function App() {
                       <div className="space-y-3">
                         <AnimatePresence mode="popLayout">
                           {laterTasks.map((task) => (
+                            <TaskItem
+                              key={task.id}
+                              task={task}
+                              onToggleComplete={handleToggleComplete}
+                              onDelete={handleDeleteTask}
+                              onEdit={handleStartEdit}
+                            />
+                          ))}
+                        </AnimatePresence>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Completed Before Today Group */}
+                  {completedBeforeTodayTasks.length > 0 && (
+                    <div id="group-completed-before" className="space-y-3">
+                      <div className="flex items-center gap-2 border-b border-zinc-900 pb-2">
+                        <div className="p-1 bg-zinc-500/10 text-zinc-400 rounded-lg border border-zinc-800/15">
+                          <CheckCircle2 size={14} />
+                        </div>
+                        <h4 className="text-xs font-black uppercase tracking-wider text-zinc-400">
+                          Đã hoàn thành trước đây
+                        </h4>
+                        <span className="text-[10px] bg-zinc-500/15 border border-zinc-800/20 text-zinc-400 rounded-full px-2 font-bold font-mono">
+                          {completedBeforeTodayTasks.length}
+                        </span>
+                      </div>
+                      <div className="space-y-3">
+                        <AnimatePresence mode="popLayout">
+                          {completedBeforeTodayTasks.map((task) => (
                             <TaskItem
                               key={task.id}
                               task={task}
