@@ -7,9 +7,6 @@ import { TaskStats } from './components/TaskStats';
 import { TaskForm } from './components/TaskForm';
 import { TaskItem } from './components/TaskItem';
 import { NotificationModal } from './components/NotificationModal';
-import { doc, onSnapshot, setDoc, getDoc } from 'firebase/firestore';
-import { db, auth, googleProvider } from './lib/firebase';
-import { signInWithPopup, signOut, onAuthStateChanged, User } from 'firebase/auth';
 import { 
   CheckSquare, 
   Search, 
@@ -23,16 +20,10 @@ import {
   RefreshCw,
   Eye,
   EyeOff,
-  Cloud,
-  Copy,
-  Check,
   Calendar,
   CalendarDays,
   Sun,
   Sparkles,
-  Smartphone,
-  LogOut,
-  User as UserIcon,
   CheckCircle2
 } from 'lucide-react';
 import { CATEGORY_DETAILS } from './utils/constants';
@@ -50,7 +41,6 @@ export default function App() {
     const saved = localStorage.getItem('daily_target_goal');
     if (saved) {
       const parsed = Number(saved);
-      // Migrate legacy percentage goal (e.g. 50 or 100) to a reasonable task count (e.g. 3)
       if (parsed > 25) {
         return 3;
       }
@@ -74,50 +64,6 @@ export default function App() {
     }
     return null;
   });
-
-  // Sync States
-  const [syncStatus, setSyncStatus] = useState<'idle' | 'loading' | 'connected' | 'error'>('idle');
-  const [syncMessage, setSyncMessage] = useState('');
-  const isSyncingFromCloud = useRef(false);
-  const hasLoadedCloudData = useRef(false);
-
-  // User Auth State
-  const [user, setUser] = useState<User | null>(null);
-
-  // Auth State Listener
-  useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (firebaseUser) => {
-      setUser(firebaseUser);
-    });
-    return () => unsubscribe();
-  }, []);
-
-  const handleGoogleSignIn = async () => {
-    setSyncStatus('loading');
-    setSyncMessage('Đang kết nối tài khoản Google...');
-    try {
-      const result = await signInWithPopup(auth, googleProvider);
-      setSyncStatus('connected');
-      setSyncMessage(`Đăng nhập thành công! Chào mừng ${result.user.displayName || result.user.email}`);
-    } catch (e: any) {
-      console.error("Google Sign-In Error:", e);
-      setSyncStatus('error');
-      setSyncMessage(`Không thể đăng nhập: ${e?.message || 'Vui lòng thử lại.'}`);
-    }
-  };
-
-  const handleSignOut = async () => {
-    setSyncStatus('loading');
-    try {
-      await signOut(auth);
-      setSyncStatus('idle');
-      setSyncMessage('Đã đăng xuất tài khoản Google.');
-    } catch (e: any) {
-      console.error("Google Sign-Out Error:", e);
-      setSyncStatus('error');
-      setSyncMessage('Có lỗi xảy ra khi đăng xuất.');
-    }
-  };
 
   // Search & Filtering
   const [searchQuery, setSearchQuery] = useState('');
@@ -256,107 +202,21 @@ export default function App() {
     hasCleanedUp.current = true;
   }, [tasks]);
 
-  // Save data to cloud (Firestore)
-  const saveDataToCloud = async (
-    currentTasks: Task[],
-    currentTargetGoal: number,
-    currentManualRating: number | null,
-    codeToUse = user ? `USER-${user.uid}` : null
-  ) => {
-    if (!codeToUse || isSyncingFromCloud.current) return;
-    
-    // Safety check: Don't allow writing back to cloud until the initial cloud load completes successfully.
-    if (!hasLoadedCloudData.current) {
-      console.log("Ngăn chặn ghi đè: Dữ liệu đám mây chưa được tải xong.");
-      return;
-    }
-
-    try {
-      const docRef = doc(db, 'sync_sessions', codeToUse);
-      await setDoc(docRef, {
-        tasks: currentTasks,
-        dailyTargetGoal: currentTargetGoal,
-        manualPerformanceRating: currentManualRating,
-        updatedAt: new Date().toISOString()
-      }, { merge: true });
-    } catch (e) {
-      console.error("Error saving data to cloud:", e);
-    }
-  };
-
-  // Real-time Firestore Sync Effect (Google Account Only)
-  useEffect(() => {
-    hasLoadedCloudData.current = false;
-
-    if (!user) {
-      setSyncStatus('idle');
-      setSyncMessage('');
-      hasLoadedCloudData.current = true; // Allow local offline modifications to save locally
-      return;
-    }
-
-    const activeKey = `USER-${user.uid}`;
-    setSyncStatus('loading');
-    setSyncMessage('Đang đồng bộ với tài khoản Google...');
-    
-    const docRef = doc(db, 'sync_sessions', activeKey);
-    
-    const unsubscribe = onSnapshot(docRef, (snapshot) => {
-      if (snapshot.exists()) {
-        const data = snapshot.data();
-        isSyncingFromCloud.current = true;
-        
-        if (data.tasks) {
-          setTasks(data.tasks);
-          localStorage.setItem('daily_todos', JSON.stringify(data.tasks));
-        }
-        if (data.dailyTargetGoal !== undefined) {
-          setDailyTargetGoal(data.dailyTargetGoal);
-          localStorage.setItem('daily_target_goal', String(data.dailyTargetGoal));
-        }
-        if (data.manualPerformanceRating !== undefined) {
-          setManualPerformanceRating(data.manualPerformanceRating);
-          localStorage.setItem('manual_performance_rating', JSON.stringify(data.manualPerformanceRating));
-        }
-        
-        isSyncingFromCloud.current = false;
-        hasLoadedCloudData.current = true; // Mark as successfully loaded from cloud
-        setSyncStatus('connected');
-        setSyncMessage(`Đồng bộ thành công qua tài khoản Google: ${user.email}`);
-      } else {
-        // Create the session in firestore if it doesn't exist yet
-        setSyncStatus('connected');
-        hasLoadedCloudData.current = true; // Allow saving from now on
-        saveDataToCloud(tasks, dailyTargetGoal, manualPerformanceRating, activeKey);
-        setSyncMessage(`Đã tạo tài khoản đồng bộ: ${user.email}`);
-      }
-    }, (error) => {
-      console.error("Firestore sync error:", error);
-      setSyncStatus('error');
-      setSyncMessage("Lỗi kết nối đồng bộ đám mây.");
-    });
-
-    return () => unsubscribe();
-  }, [user]);
-
   // Save tasks on modification
   const saveTasks = (newTasks: Task[]) => {
     setTasks(newTasks);
     localStorage.setItem('daily_todos', JSON.stringify(newTasks));
-    saveDataToCloud(newTasks, dailyTargetGoal, manualPerformanceRating);
   };
 
   // Handle updates from Stats Component
   const handleUpdateDailyTargetGoal = (goal: number) => {
     setDailyTargetGoal(goal);
     localStorage.setItem('daily_target_goal', String(goal));
-    saveDataToCloud(tasks, goal, manualPerformanceRating);
   };
 
   const handleUpdateManualPerformanceRating = (rating: number | null) => {
     setManualPerformanceRating(rating);
     localStorage.setItem('manual_performance_rating', JSON.stringify(rating));
-    saveDataToCloud(tasks, dailyTargetGoal, rating);
   };
 
   // Live Clock effect (ticks every second)
@@ -847,96 +707,6 @@ export default function App() {
           manualPerformanceRating={manualPerformanceRating}
           onUpdateManualPerformanceRating={handleUpdateManualPerformanceRating}
         />
-
-        {/* Real-time Cloud Sync Panel */}
-        <div id="cloud-sync-panel" className="bg-zinc-900/50 border border-zinc-800 rounded-[28px] p-6 shadow-lg text-zinc-100 space-y-4">
-          
-          {/* Google Sync */}
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-zinc-950/40 border border-zinc-850/50 p-4 rounded-2xl">
-            <div className="flex items-center gap-3">
-              {user ? (
-                user.photoURL ? (
-                  <img
-                    src={user.photoURL}
-                    alt={user.displayName || "User"}
-                    className="h-10 w-10 rounded-full border border-indigo-500/30"
-                    referrerPolicy="no-referrer"
-                  />
-                ) : (
-                  <div className="h-10 w-10 bg-indigo-500/10 text-indigo-400 rounded-full flex items-center justify-center border border-indigo-500/15">
-                    <UserIcon size={20} />
-                  </div>
-                )
-              ) : (
-                <div className="h-10 w-10 bg-zinc-800/30 text-zinc-400 rounded-full flex items-center justify-center border border-zinc-700/20">
-                  <UserIcon size={20} />
-                </div>
-              )}
-              <div>
-                <h4 className="text-sm font-bold text-white flex items-center gap-1.5">
-                  Đồng bộ đám mây bằng tài khoản Google
-                  {user && (
-                    <span className="flex items-center gap-1 text-[9px] font-bold text-indigo-400 bg-indigo-500/10 border border-indigo-500/20 px-1.5 py-0.2 rounded-md">
-                      ACTIVE
-                    </span>
-                  )}
-                </h4>
-                <p className="text-xs text-zinc-400">
-                  {user ? user.email : "Sao lưu dữ liệu tự động, khôi phục từ bất kỳ thiết bị nào khi đăng nhập Google"}
-                </p>
-              </div>
-            </div>
-            
-            <div>
-              {user ? (
-                <button
-                  type="button"
-                  onClick={handleSignOut}
-                  className="flex items-center gap-1.5 px-3.5 py-2 bg-zinc-900 hover:bg-zinc-850 border border-zinc-800 text-zinc-300 hover:text-white font-bold rounded-xl text-xs transition-all cursor-pointer"
-                >
-                  <LogOut size={13} />
-                  Đăng xuất
-                </button>
-              ) : (
-                <button
-                  type="button"
-                  onClick={handleGoogleSignIn}
-                  className="flex items-center gap-2 px-4 py-2 bg-white hover:bg-zinc-100 text-zinc-950 font-bold rounded-xl text-xs transition-all cursor-pointer shadow-md shadow-white/5 active:scale-95"
-                >
-                  <svg className="w-3.5 h-3.5 mr-0.5" viewBox="0 0 24 24">
-                    <path
-                      fill="#4285F4"
-                      d="M23.745 12.27c0-.7-.06-1.4-.19-2.07H12v3.92h6.69c-.29 1.5-.1.14-.14 1.14-.85 1.49-2.12 2.5-3.67 3l.01-.01v2.51h6.41c3.75-3.46 5.44-8.55 5.44-10.49z"
-                    />
-                    <path
-                      fill="#34A853"
-                      d="M12 24c3.24 0 5.97-1.08 7.96-2.91l-6.41-2.51c-.8.53-1.85.86-3.13.86-2.42 0-4.47-1.63-5.2-3.86H.79v2.59C2.77 20.08 7.07 24 12 24z"
-                    />
-                    <path
-                      fill="#FBBC05"
-                      d="M6.8 15.58a7.14 7.14 0 0 1 0-4.57V8.42H.79a11.94 11.94 0 0 0 0 10.34l6.01-3.18z"
-                    />
-                    <path
-                      fill="#EA4335"
-                      d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.43-3.43C17.96 1.19 15.24 0 12 0 7.07 0 2.77 3.92.79 7.83l6.01 3.18c.73-2.23 2.78-3.86 5.2-3.86z"
-                    />
-                  </svg>
-                  Đăng nhập Google
-                </button>
-              )}
-            </div>
-          </div>
-          
-          {syncMessage && (
-            <div className={`text-xs flex items-center gap-1 px-3 py-1.5 rounded-xl border ${
-              syncStatus === 'error' 
-                ? 'bg-red-500/10 border-red-500/20 text-red-400' 
-                : 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400'
-            }`}>
-              <span className="font-medium">{syncMessage}</span>
-            </div>
-          )}
-        </div>
 
         {/* Workspace Body Grid */}
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
